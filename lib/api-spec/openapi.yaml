@@ -3,20 +3,23 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Cinematic AI Studio API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
-    description: Health operations
+  - name: projects
+  - name: characters
+  - name: scenes
+  - name: schedules
+  - name: dashboard
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,13 +27,542 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /projects:
+    get:
+      operationId: listProjects
+      tags: [projects]
+      summary: List all projects
+      responses:
+        "200":
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Project"
+    post:
+      operationId: createProject
+      tags: [projects]
+      summary: Create a new project from a prompt
+      description: Creates a project, then synchronously runs the LLM story breakdown to produce a global style, a cast of characters, and a sequence of scenes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectBody"
+      responses:
+        "201":
+          description: Created project with full plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectWithPlan"
+        "500":
+          description: Plan generation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /projects/{id}:
+    get:
+      operationId: getProject
+      tags: [projects]
+      summary: Get a project with characters, scenes, schedules
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Project with plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectWithPlan"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    patch:
+      operationId: updateProject
+      tags: [projects]
+      summary: Update a project's title, style, or seed
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectBody"
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: deleteProject
+      tags: [projects]
+      summary: Delete a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "204":
+          description: Deleted
+
+  /projects/{id}/render:
+    post:
+      operationId: renderProject
+      tags: [projects]
+      summary: Kick off the full render pipeline for the project
+      description: Marks all scenes as queued and advances the project to the rendering state. Real video provider hooks live in the render queue worker.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Render started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectWithPlan"
+
+  /characters/{id}:
+    patch:
+      operationId: updateCharacter
+      tags: [characters]
+      summary: Edit a character sheet (face, clothing, voice, base prompt)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCharacterBody"
+      responses:
+        "200":
+          description: Updated character
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Character"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /characters/{id}/regenerate-reference:
+    post:
+      operationId: regenerateCharacterReference
+      tags: [characters]
+      summary: Regenerate the locked reference image for a character
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Updated character with new reference image
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Character"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /scenes/{id}:
+    patch:
+      operationId: updateScene
+      tags: [scenes]
+      summary: Edit a scene's environment, action, camera, mood, or prompt
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSceneBody"
+      responses:
+        "200":
+          description: Updated scene
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Scene"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /scenes/{id}/regenerate:
+    post:
+      operationId: regenerateScene
+      tags: [scenes]
+      summary: Regenerate the storyboard preview frame for a scene with locked character + style
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Updated scene
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Scene"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /schedules:
+    get:
+      operationId: listSchedules
+      tags: [schedules]
+      summary: List all scheduled posts
+      responses:
+        "200":
+          description: List of schedules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ScheduleWithProject"
+    post:
+      operationId: createSchedule
+      tags: [schedules]
+      summary: Schedule a project for publish to YouTube and/or Instagram
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateScheduleBody"
+      responses:
+        "201":
+          description: Scheduled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Schedule"
+
+  /schedules/{id}:
+    delete:
+      operationId: deleteSchedule
+      tags: [schedules]
+      summary: Cancel a scheduled publish
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "204":
+          description: Deleted
+
+  /schedules/upcoming:
+    get:
+      operationId: getUpcomingSchedules
+      tags: [schedules]
+      summary: Upcoming queue (next 10 publishes across platforms)
+      responses:
+        "200":
+          description: Upcoming schedules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ScheduleWithProject"
+
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Top-line counts and pipeline status
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
+  /dashboard/recent-activity:
+    get:
+      operationId: getRecentActivity
+      tags: [dashboard]
+      summary: Recent project, scene, and schedule activity
+      responses:
+        "200":
+          description: Activity feed
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ActivityItem"
+
 components:
   schemas:
     HealthStatus:
       type: object
+      required: [status]
       properties:
+        status: { type: string }
+
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+
+    Project:
+      type: object
+      required: [id, title, prompt, styleName, stylePrompt, seed, status, createdAt, updatedAt]
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        prompt: { type: string }
+        logline:
+          type: ["string", "null"]
+        styleName: { type: string }
+        stylePrompt: { type: string }
+        colorGrading:
+          type: ["string", "null"]
+        seed: { type: integer }
         status:
           type: string
-      required:
-        - status
+          enum: [planning, ready, rendering, rendered, published, failed]
+        coverImageUrl:
+          type: ["string", "null"]
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
 
+    Character:
+      type: object
+      required: [id, projectId, name, faceDescription, clothing, voiceStyle, basePrompt, createdAt]
+      properties:
+        id: { type: integer }
+        projectId: { type: integer }
+        name: { type: string }
+        faceDescription: { type: string }
+        clothing: { type: string }
+        voiceStyle: { type: string }
+        basePrompt: { type: string }
+        referenceImageUrl:
+          type: ["string", "null"]
+        createdAt: { type: string, format: date-time }
+
+    Scene:
+      type: object
+      required: [id, projectId, sequence, title, environment, action, cameraAngle, mood, prompt, status, durationSeconds, createdAt]
+      properties:
+        id: { type: integer }
+        projectId: { type: integer }
+        sequence: { type: integer }
+        title: { type: string }
+        environment: { type: string }
+        action: { type: string }
+        cameraAngle: { type: string }
+        mood: { type: string }
+        prompt: { type: string }
+        previousSummary:
+          type: ["string", "null"]
+        characterIds:
+          type: array
+          items: { type: integer }
+        durationSeconds: { type: integer }
+        status:
+          type: string
+          enum: [draft, queued, rendering, rendered, failed]
+        previewImageUrl:
+          type: ["string", "null"]
+        videoUrl:
+          type: ["string", "null"]
+        createdAt: { type: string, format: date-time }
+
+    ProjectWithPlan:
+      allOf:
+        - $ref: "#/components/schemas/Project"
+        - type: object
+          required: [characters, scenes, schedules]
+          properties:
+            characters:
+              type: array
+              items: { $ref: "#/components/schemas/Character" }
+            scenes:
+              type: array
+              items: { $ref: "#/components/schemas/Scene" }
+            schedules:
+              type: array
+              items: { $ref: "#/components/schemas/Schedule" }
+
+    CreateProjectBody:
+      type: object
+      required: [prompt]
+      properties:
+        title:
+          type: ["string", "null"]
+        prompt: { type: string }
+        styleHint:
+          type: ["string", "null"]
+          description: Optional style direction (e.g. "Pixar 3D animation", "Studio Ghibli watercolor")
+
+    UpdateProjectBody:
+      type: object
+      properties:
+        title: { type: string }
+        styleName: { type: string }
+        stylePrompt: { type: string }
+        colorGrading: { type: string }
+        seed: { type: integer }
+
+    UpdateCharacterBody:
+      type: object
+      properties:
+        name: { type: string }
+        faceDescription: { type: string }
+        clothing: { type: string }
+        voiceStyle: { type: string }
+        basePrompt: { type: string }
+
+    UpdateSceneBody:
+      type: object
+      properties:
+        title: { type: string }
+        environment: { type: string }
+        action: { type: string }
+        cameraAngle: { type: string }
+        mood: { type: string }
+        prompt: { type: string }
+        durationSeconds: { type: integer }
+        sequence: { type: integer }
+
+    Schedule:
+      type: object
+      required: [id, projectId, platform, scheduledAt, status, caption, createdAt]
+      properties:
+        id: { type: integer }
+        projectId: { type: integer }
+        platform:
+          type: string
+          enum: [youtube, instagram]
+        scheduledAt: { type: string, format: date-time }
+        status:
+          type: string
+          enum: [queued, publishing, published, failed, canceled]
+        caption: { type: string }
+        hashtags:
+          type: ["string", "null"]
+        externalUrl:
+          type: ["string", "null"]
+        createdAt: { type: string, format: date-time }
+
+    ScheduleWithProject:
+      allOf:
+        - $ref: "#/components/schemas/Schedule"
+        - type: object
+          required: [projectTitle]
+          properties:
+            projectTitle: { type: string }
+            coverImageUrl:
+              type: ["string", "null"]
+
+    CreateScheduleBody:
+      type: object
+      required: [projectId, platform, scheduledAt, caption]
+      properties:
+        projectId: { type: integer }
+        platform:
+          type: string
+          enum: [youtube, instagram]
+        scheduledAt: { type: string, format: date-time }
+        caption: { type: string }
+        hashtags:
+          type: ["string", "null"]
+
+    DashboardSummary:
+      type: object
+      required: [totalProjects, totalScenes, totalCharacters, scheduledCount, publishedCount, renderingCount, byStatus, byPlatform]
+      properties:
+        totalProjects: { type: integer }
+        totalScenes: { type: integer }
+        totalCharacters: { type: integer }
+        scheduledCount: { type: integer }
+        publishedCount: { type: integer }
+        renderingCount: { type: integer }
+        byStatus:
+          type: array
+          items:
+            type: object
+            required: [status, count]
+            properties:
+              status: { type: string }
+              count: { type: integer }
+        byPlatform:
+          type: array
+          items:
+            type: object
+            required: [platform, count]
+            properties:
+              platform: { type: string }
+              count: { type: integer }
+
+    ActivityItem:
+      type: object
+      required: [id, kind, title, subtitle, createdAt]
+      properties:
+        id: { type: string }
+        kind:
+          type: string
+          enum: [project_created, scene_rendered, schedule_created, schedule_published, character_updated]
+        title: { type: string }
+        subtitle: { type: string }
+        projectId:
+          type: ["integer", "null"]
+        createdAt: { type: string, format: date-time }
