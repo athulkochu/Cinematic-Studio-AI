@@ -72,9 +72,9 @@ export default function NewProject() {
                   <Sparkles className="h-16 w-16 text-primary animate-pulse relative z-10" />
                 </div>
                 <div>
-                  <h2 className="text-2xl font-bold mb-2">Architecting your world...</h2>
+                  <h2 className="text-2xl font-bold mb-2">Building your story…</h2>
                   <p className="text-muted-foreground max-w-md mx-auto">
-                    Our AI is breaking down your prompt into a full narrative sequence, designing characters, establishing visual continuity rules, and planning scenes. This usually takes 20-40 seconds.
+                    Writing the logline, casting characters, and breaking the script into scenes. Usually about 15 seconds.
                   </p>
                 </div>
                 <div className="w-64 h-1.5 bg-secondary rounded-full overflow-hidden">
@@ -88,8 +88,8 @@ export default function NewProject() {
                 exit={{ opacity: 0, y: -20 }}
               >
                 <div className="mb-8">
-                  <h1 className="text-3xl font-bold tracking-tight">New Cinematic Project</h1>
-                  <p className="text-muted-foreground mt-1">Start a new story. The engine will handle casting, continuity, and scene breakdowns.</p>
+                  <h1 className="text-3xl font-bold tracking-tight">New project</h1>
+                  <p className="text-muted-foreground mt-1">Describe your story. We'll handle the rest.</p>
                 </div>
 
                 <Card className="border-border/50 shadow-xl bg-card/50 backdrop-blur-sm">
@@ -147,7 +147,7 @@ export default function NewProject() {
                         <div className="pt-4 flex justify-end">
                           <Button type="submit" size="lg" className="gap-2 px-8 font-semibold">
                             <Sparkles size={18} />
-                            Generate Project Blueprint
+                            Create project
                           </Button>
                         </div>
                       </form>

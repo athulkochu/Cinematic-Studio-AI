@@ -11,8 +11,9 @@ import {
 } from "../lib/serializers";
 import {
   generateStoryPlan,
-  generateCharacterReferenceImage,
+  generateScenePreviewImage,
 } from "../lib/continuity-engine";
+import { inArray } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -78,20 +79,9 @@ router.post("/projects", async (req, res) => {
     })
     .returning();
 
-  // Insert characters with reference images (parallel)
+  // Insert characters without reference images (generated lazily on demand)
   const characterRows = await Promise.all(
     plan.characters.map(async (c) => {
-      let referenceImageUrl: string | null = null;
-      try {
-        referenceImageUrl = await generateCharacterReferenceImage({
-          character: c,
-          stylePrompt: plan.stylePrompt,
-          colorGrading: plan.colorGrading,
-          seed,
-        });
-      } catch (err) {
-        logger.warn({ err, character: c.name }, "Character reference image failed");
-      }
       const [row] = await db
         .insert(charactersTable)
         .values({
@@ -101,7 +91,7 @@ router.post("/projects", async (req, res) => {
           clothing: c.clothing,
           voiceStyle: c.voiceStyle,
           basePrompt: c.basePrompt,
-          referenceImageUrl,
+          referenceImageUrl: null,
         })
         .returning();
       return row;
@@ -136,15 +126,6 @@ router.post("/projects", async (req, res) => {
       return row;
     }),
   );
-
-  // Use first character reference as cover if available
-  const cover = characterRows.find((c) => c.referenceImageUrl)?.referenceImageUrl ?? null;
-  if (cover) {
-    await db
-      .update(projectsTable)
-      .set({ coverImageUrl: cover })
-      .where(eq(projectsTable.id, insertedProject.id));
-  }
 
   const full = await loadProjectWithPlan(insertedProject.id);
   res.status(201).json(full);
@@ -189,6 +170,68 @@ router.delete("/projects/:id", async (req, res) => {
   res.status(204).send();
 });
 
+async function renderProjectInBackground(id: number) {
+  const project = await db.query.projectsTable.findFirst({
+    where: eq(projectsTable.id, id),
+  });
+  if (!project) return;
+
+  const [scenes, allCharacters] = await Promise.all([
+    db.select().from(scenesTable).where(eq(scenesTable.projectId, id)).orderBy(scenesTable.sequence),
+    db.select().from(charactersTable).where(eq(charactersTable.projectId, id)),
+  ]);
+  const charById = new Map(allCharacters.map((c) => [c.id, c]));
+
+  await Promise.all(
+    scenes.map((s) =>
+      db
+        .update(scenesTable)
+        .set({ status: "rendering" })
+        .where(eq(scenesTable.id, s.id)),
+    ),
+  );
+
+  let firstUrl: string | null = null;
+  let succeeded = 0;
+
+  await Promise.allSettled(
+    scenes.map(async (scene) => {
+      const ids = scene.characterIds ?? [];
+      const chars = ids.map((cid) => charById.get(cid)).filter((c): c is NonNullable<typeof c> => !!c);
+      try {
+        const url = await generateScenePreviewImage({
+          scene,
+          stylePrompt: project.stylePrompt,
+          colorGrading: project.colorGrading,
+          seed: project.seed,
+          characters: chars,
+          previousSummary: scene.previousSummary,
+        });
+        await db
+          .update(scenesTable)
+          .set({ previewImageUrl: url, status: "rendered" })
+          .where(eq(scenesTable.id, scene.id));
+        succeeded++;
+        if (scene.sequence === 1 || !firstUrl) firstUrl = url;
+      } catch (err) {
+        logger.warn({ err, sceneId: scene.id }, "Scene render failed");
+        await db
+          .update(scenesTable)
+          .set({ status: "draft" })
+          .where(eq(scenesTable.id, scene.id));
+      }
+    }),
+  );
+
+  await db
+    .update(projectsTable)
+    .set({
+      status: succeeded === scenes.length ? "rendered" : "ready",
+      ...(firstUrl ? { coverImageUrl: firstUrl } : {}),
+    })
+    .where(eq(projectsTable.id, id));
+}
+
 router.post("/projects/:id/render", async (req, res) => {
   const id = Number(req.params.id);
   const project = await db.query.projectsTable.findFirst({
@@ -198,16 +241,19 @@ router.post("/projects/:id/render", async (req, res) => {
     res.status(404).json({ error: "Project not found" });
     return;
   }
-  await db
-    .update(scenesTable)
-    .set({ status: "queued" })
-    .where(eq(scenesTable.projectId, id));
+
   await db
     .update(projectsTable)
     .set({ status: "rendering" })
     .where(eq(projectsTable.id, id));
+
+  // Fire and forget — frontend polls for updates
+  renderProjectInBackground(id).catch((err) =>
+    logger.error({ err, projectId: id }, "Background render failed"),
+  );
+
   const full = await loadProjectWithPlan(id);
-  res.json(full);
+  res.status(202).json(full);
 });
 
 export default router;
