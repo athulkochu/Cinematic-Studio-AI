@@ -40,7 +40,18 @@ export default function Workspace() {
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
 
-  const { data: project, isLoading, error } = useGetProject(projectId);
+  const { data: project, isLoading, error } = useGetProject(projectId, {
+    query: {
+      refetchInterval: (query) => {
+        const data: any = query.state.data;
+        if (!data) return false;
+        const stillWorking = data.status === "rendering" ||
+          data.scenes?.some((s: any) => s.status === "rendering") ||
+          data.characters?.some((c: any) => !c.referenceImageUrl);
+        return stillWorking ? 3000 : false;
+      },
+    },
+  });
   const deleteProject = useDeleteProject();
   const renderProject = useRenderProject();
 
@@ -84,11 +95,11 @@ export default function Workspace() {
   const handleRender = () => {
     renderProject.mutate({ id: projectId }, {
       onSuccess: () => {
-        toast.success("Rendering pipeline started!");
+        toast.success("Generating storyboard frames…");
         queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) });
       },
       onError: (err) => {
-        toast.error("Failed to start render: " + (err as any).message);
+        toast.error("Failed to start: " + (err as any).message);
       }
     });
   };
@@ -131,7 +142,7 @@ export default function Workspace() {
               className={cn("gap-2 shadow-lg shadow-primary/20", isRendering ? "animate-pulse" : "")}
             >
               {isRendering ? <Loader2 size={16} className="animate-spin" /> : <PlayCircle size={16} />}
-              {isRendering ? "Rendering..." : "Render Full Video"}
+              {isRendering ? "Generating…" : "Generate Storyboard Frames"}
             </Button>
             
             <DropdownMenu>
@@ -155,12 +166,15 @@ export default function Workspace() {
           {/* Main Content Area */}
           <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
             <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center justify-between mb-4">
                 <TabsList className="bg-card/50 border border-border/50">
                   <TabsTrigger value="scenes" className="gap-2"><Clapperboard size={14} /> Storyboard ({project.scenes.length})</TabsTrigger>
                   <TabsTrigger value="characters" className="gap-2"><Users size={14} /> Cast ({project.characters.length})</TabsTrigger>
                 </TabsList>
               </div>
+              <p className="text-xs text-muted-foreground mb-6">
+                This studio generates a story plan, character sheets, and one still frame per scene — not a finished video file. Connect a video model (Runway, Pika, etc.) to extend frames into motion.
+              </p>
 
               <TabsContent value="scenes" className="flex-1 m-0 focus-visible:outline-none">
                 {/* Horizontal Scene Strip */}
