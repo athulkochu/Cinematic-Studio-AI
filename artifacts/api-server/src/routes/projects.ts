@@ -13,6 +13,129 @@ import {
   generateStoryPlan,
   generateCharacterReferenceImage,
 } from "../lib/continuity-engine";
+import { ObjectStorageService } from "../lib/objectStorage";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
+import ffmpeg from "fluent-ffmpeg";
+
+const requireFromHere = createRequire(import.meta.url);
+function resolveFfmpegPath(): string {
+  const platformPkg = `@ffmpeg-installer/${process.platform}-${process.arch}`;
+  try {
+    const pkgJsonPath = requireFromHere.resolve(`${platformPkg}/package.json`);
+    const binName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+    return path.join(path.dirname(pkgJsonPath), binName);
+  } catch {
+    // Fallback to the wrapper package (works in npm/yarn layouts).
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    return requireFromHere("@ffmpeg-installer/ffmpeg").path;
+  }
+}
+ffmpeg.setFfmpegPath(resolveFfmpegPath());
+
+const storage = new ObjectStorageService();
+
+async function deleteAssetIfStored(url: string | null | undefined) {
+  if (!url) return;
+  if (url.startsWith("/api/storage/objects/")) {
+    await storage.deleteByPublicPath(url);
+  }
+}
+
+async function loadAssetBuffer(url: string): Promise<Buffer | null> {
+  if (url.startsWith("data:")) {
+    const m = url.match(/^data:[^;]+;base64,(.+)$/);
+    return m ? Buffer.from(m[1], "base64") : null;
+  }
+  if (url.startsWith("/api/storage/objects/")) {
+    return await storage.downloadToBuffer(url);
+  }
+  return null;
+}
+
+async function runExportJob(projectId: number) {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `export-${projectId}-`));
+  try {
+    const scenes = await db
+      .select()
+      .from(scenesTable)
+      .where(eq(scenesTable.projectId, projectId))
+      .orderBy(scenesTable.sequence);
+
+    const usable = scenes.filter((s) => s.previewImageUrl);
+    if (usable.length === 0) {
+      await db
+        .update(projectsTable)
+        .set({ exportStatus: "failed" })
+        .where(eq(projectsTable.id, projectId));
+      return;
+    }
+
+    const concatLines: string[] = [];
+    for (let i = 0; i < usable.length; i++) {
+      const s = usable[i];
+      const buf = await loadAssetBuffer(s.previewImageUrl!);
+      if (!buf) continue;
+      const framePath = path.join(tmpDir, `frame_${String(i).padStart(4, "0")}.png`);
+      await fs.writeFile(framePath, buf);
+      const duration = Math.max(1, s.durationSeconds || 4);
+      concatLines.push(`file '${framePath.replace(/'/g, "'\\''")}'`);
+      concatLines.push(`duration ${duration}`);
+    }
+    // ffmpeg concat demuxer requires the last file to be repeated without duration
+    const lastFrame = path.join(tmpDir, `frame_${String(usable.length - 1).padStart(4, "0")}.png`);
+    concatLines.push(`file '${lastFrame.replace(/'/g, "'\\''")}'`);
+
+    const listPath = path.join(tmpDir, "concat.txt");
+    await fs.writeFile(listPath, concatLines.join("\n"));
+    const outPath = path.join(tmpDir, `video_${randomUUID()}.mp4`);
+
+    await new Promise<void>((resolve, reject) => {
+      ffmpeg()
+        .input(listPath)
+        .inputOptions(["-f", "concat", "-safe", "0"])
+        .outputOptions([
+          "-vsync", "vfr",
+          "-pix_fmt", "yuv420p",
+          "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=30",
+          "-c:v", "libx264",
+          "-preset", "veryfast",
+          "-crf", "23",
+          "-movflags", "+faststart",
+        ])
+        .save(outPath)
+        .on("end", () => resolve())
+        .on("error", (err) => reject(err));
+    });
+
+    const videoBuf = await fs.readFile(outPath);
+    const videoUrl = await storage.uploadBuffer(videoBuf, "video/mp4", ".mp4");
+
+    const existing = await db.query.projectsTable.findFirst({
+      where: eq(projectsTable.id, projectId),
+    });
+    if (existing?.videoUrl) {
+      await deleteAssetIfStored(existing.videoUrl).catch(() => {});
+    }
+
+    await db
+      .update(projectsTable)
+      .set({ videoUrl, exportStatus: "ready" })
+      .where(eq(projectsTable.id, projectId));
+    logger.info({ projectId, videoUrl }, "Video export complete");
+  } catch (err) {
+    logger.error({ err, projectId }, "Video export failed");
+    await db
+      .update(projectsTable)
+      .set({ exportStatus: "failed" })
+      .where(eq(projectsTable.id, projectId));
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
 
 const router: IRouter = Router();
 
@@ -185,8 +308,64 @@ router.patch("/projects/:id", async (req, res) => {
 
 router.delete("/projects/:id", async (req, res) => {
   const id = Number(req.params.id);
+  if (Number.isNaN(id)) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const project = await db.query.projectsTable.findFirst({
+    where: eq(projectsTable.id, id),
+  });
+  if (project) {
+    const characters = await db
+      .select()
+      .from(charactersTable)
+      .where(eq(charactersTable.projectId, id));
+    const scenes = await db
+      .select()
+      .from(scenesTable)
+      .where(eq(scenesTable.projectId, id));
+    const urls: (string | null)[] = [
+      project.coverImageUrl,
+      project.videoUrl,
+      ...characters.map((c) => c.referenceImageUrl),
+      ...scenes.map((s) => s.previewImageUrl),
+    ];
+    await Promise.allSettled(urls.map((u) => deleteAssetIfStored(u)));
+  }
   await db.delete(projectsTable).where(eq(projectsTable.id, id));
   res.status(204).send();
+});
+
+router.post("/projects/:id/export", async (req, res) => {
+  const id = Number(req.params.id);
+  if (Number.isNaN(id)) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const project = await db.query.projectsTable.findFirst({
+    where: eq(projectsTable.id, id),
+  });
+  if (!project) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+  const scenes = await db
+    .select()
+    .from(scenesTable)
+    .where(eq(scenesTable.projectId, id));
+  const renderable = scenes.filter((s) => s.previewImageUrl);
+  if (renderable.length === 0) {
+    res.status(400).json({ error: "No rendered scenes available. Generate storyboard frames first." });
+    return;
+  }
+  await db
+    .update(projectsTable)
+    .set({ exportStatus: "exporting" })
+    .where(eq(projectsTable.id, id));
+  // Kick off background job
+  void runExportJob(id);
+  const full = await loadProjectWithPlan(id);
+  res.status(202).json(full);
 });
 
 router.post("/projects/:id/render", async (req, res) => {

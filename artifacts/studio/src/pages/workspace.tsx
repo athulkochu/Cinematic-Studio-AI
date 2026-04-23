@@ -4,12 +4,13 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { format } from "date-fns";
-import { Loader2, Clapperboard, Settings2, Users, Image as ImageIcon, Send, Calendar as CalendarIcon, RefreshCw, Trash2, ArrowLeft, MoreVertical, PlayCircle, Eye, Film, Layers } from "lucide-react";
+import { Loader2, Clapperboard, Settings2, Users, Image as ImageIcon, Send, Calendar as CalendarIcon, RefreshCw, Trash2, ArrowLeft, MoreVertical, PlayCircle, Eye, Film, Layers, Download, Video } from "lucide-react";
 import { 
   useGetProject, getGetProjectQueryKey,
   useUpdateProject, 
   useDeleteProject,
   useRenderProject,
+  useExportProjectVideo,
   useUpdateCharacter,
   useRegenerateCharacterReference,
   useUpdateScene,
@@ -40,9 +41,20 @@ export default function Workspace() {
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
 
-  const { data: project, isLoading, error } = useGetProject(projectId);
+  const { data: project, isLoading, error } = useGetProject(projectId, {
+    query: {
+      refetchInterval: (q) => {
+        const data: any = q.state.data;
+        if (!data) return false;
+        if (data.exportStatus === "exporting") return 3000;
+        if (data.scenes?.some((s: any) => s.status === "rendering" || s.status === "queued")) return 4000;
+        return false;
+      },
+    },
+  });
   const deleteProject = useDeleteProject();
   const renderProject = useRenderProject();
+  const exportVideo = useExportProjectVideo();
 
   const [activeTab, setActiveTab] = useState("scenes");
 
@@ -95,6 +107,31 @@ export default function Workspace() {
 
   const isRendering = project.status === 'rendering';
   const isPublished = project.status === 'published';
+  const isExporting = (project as any).exportStatus === 'exporting';
+  const hasRenderedFrames = project.scenes.some((s: any) => s.previewImageUrl);
+  const videoUrl = (project as any).videoUrl as string | null;
+
+  const handleExport = () => {
+    exportVideo.mutate({ id: projectId }, {
+      onSuccess: () => {
+        toast.success("Stitching frames into video — this can take a minute…");
+        queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) });
+      },
+      onError: (err) => {
+        toast.error("Export failed: " + (err as any).message);
+      }
+    });
+  };
+
+  const handleDownload = () => {
+    if (!videoUrl) return;
+    const a = document.createElement("a");
+    a.href = videoUrl;
+    a.download = `${project.title.replace(/[^a-z0-9]+/gi, "_")}.mp4`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
 
   return (
     <Layout>
@@ -128,10 +165,21 @@ export default function Workspace() {
             <Button 
               onClick={handleRender} 
               disabled={isRendering || project.scenes.length === 0} 
-              className={cn("gap-2 shadow-lg shadow-primary/20", isRendering ? "animate-pulse" : "")}
+              variant="outline"
+              className={cn("gap-2", isRendering ? "animate-pulse" : "")}
             >
               {isRendering ? <Loader2 size={16} className="animate-spin" /> : <PlayCircle size={16} />}
-              {isRendering ? "Rendering..." : "Render Full Video"}
+              {isRendering ? "Rendering..." : "Generate Storyboard Frames"}
+            </Button>
+
+            <Button
+              onClick={handleExport}
+              disabled={isExporting || !hasRenderedFrames || exportVideo.isPending}
+              className={cn("gap-2 shadow-lg shadow-primary/20", isExporting ? "animate-pulse" : "")}
+              title={!hasRenderedFrames ? "Generate storyboard frames first" : undefined}
+            >
+              {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Video size={16} />}
+              {isExporting ? "Exporting…" : videoUrl ? "Re-export Video" : "Export Video"}
             </Button>
             
             <DropdownMenu>
@@ -163,6 +211,36 @@ export default function Workspace() {
               </div>
 
               <TabsContent value="scenes" className="flex-1 m-0 focus-visible:outline-none">
+                {/* Exported Video Player */}
+                {(videoUrl || isExporting) && (
+                  <div className="mb-8 max-w-4xl">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                        <Video size={14} /> Exported Video
+                      </h3>
+                      {videoUrl && (
+                        <Button size="sm" variant="outline" className="gap-2" onClick={handleDownload}>
+                          <Download size={14} /> Download MP4
+                        </Button>
+                      )}
+                    </div>
+                    <div className="rounded-lg border border-border bg-black overflow-hidden aspect-video relative">
+                      {videoUrl && !isExporting ? (
+                        <video src={videoUrl} controls className="w-full h-full" />
+                      ) : (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground gap-3">
+                          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                          <p className="text-xs uppercase tracking-widest">Stitching frames into MP4…</p>
+                          <p className="text-[10px] text-muted-foreground/60">This usually takes 30–90 seconds.</p>
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground/70 mt-2">
+                      Storyboard frames stitched at each scene's duration. No motion or audio yet — those come in a later phase.
+                    </p>
+                  </div>
+                )}
+
                 {/* Horizontal Scene Strip */}
                 <div className="mb-8">
                   <h3 className="text-sm font-medium text-muted-foreground mb-3 uppercase tracking-wider flex items-center gap-2">

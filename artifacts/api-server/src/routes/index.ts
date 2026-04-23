@@ -5,6 +5,7 @@ import charactersRouter from "./characters";
 import scenesRouter from "./scenes";
 import schedulesRouter from "./schedules";
 import dashboardRouter from "./dashboard";
+import storageRouter from "./storage";
 
 const router: IRouter = Router();
 
@@ -14,5 +15,6 @@ router.use(charactersRouter);
 router.use(scenesRouter);
 router.use(schedulesRouter);
 router.use(dashboardRouter);
+router.use(storageRouter);
 
 export default router;

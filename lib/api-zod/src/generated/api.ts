@@ -35,6 +35,8 @@ export const ListProjectsResponseItem = zod.object({
     "failed",
   ]),
   coverImageUrl: zod.string().nullish(),
+  videoUrl: zod.string().nullish(),
+  exportStatus: zod.enum(["idle", "exporting", "ready", "failed"]),
   createdAt: zod.coerce.date(),
   updatedAt: zod.coerce.date(),
 });
@@ -81,6 +83,8 @@ export const GetProjectResponse = zod
       "failed",
     ]),
     coverImageUrl: zod.string().nullish(),
+    videoUrl: zod.string().nullish(),
+    exportStatus: zod.enum(["idle", "exporting", "ready", "failed"]),
     createdAt: zod.coerce.date(),
     updatedAt: zod.coerce.date(),
   })
@@ -180,6 +184,8 @@ export const UpdateProjectResponse = zod.object({
     "failed",
   ]),
   coverImageUrl: zod.string().nullish(),
+  videoUrl: zod.string().nullish(),
+  exportStatus: zod.enum(["idle", "exporting", "ready", "failed"]),
   createdAt: zod.coerce.date(),
   updatedAt: zod.coerce.date(),
 });
@@ -218,6 +224,8 @@ export const RenderProjectResponse = zod
       "failed",
     ]),
     coverImageUrl: zod.string().nullish(),
+    videoUrl: zod.string().nullish(),
+    exportStatus: zod.enum(["idle", "exporting", "ready", "failed"]),
     createdAt: zod.coerce.date(),
     updatedAt: zod.coerce.date(),
   })
@@ -515,3 +523,47 @@ export const GetRecentActivityResponseItem = zod.object({
 export const GetRecentActivityResponse = zod.array(
   GetRecentActivityResponseItem,
 );
+
+/**
+ * Begins a background FFmpeg job that combines all rendered scene frames into a single video. Poll GET /projects/{id} for exportStatus and videoUrl.
+ * @summary Stitch scene frames into a downloadable MP4
+ */
+export const ExportProjectVideoParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+/**
+ * @summary Request a presigned URL for file upload
+ */
+
+export const RequestUploadUrlBody = zod.object({
+  name: zod.string().min(1),
+  size: zod.number().min(1),
+  contentType: zod.string().min(1),
+});
+
+export const RequestUploadUrlResponse = zod.object({
+  uploadURL: zod.string().url(),
+  objectPath: zod.string(),
+  metadata: zod
+    .object({
+      name: zod.string().min(1),
+      size: zod.number().min(1),
+      contentType: zod.string().min(1),
+    })
+    .optional(),
+});
+
+/**
+ * @summary Serve a public asset
+ */
+export const GetPublicObjectParams = zod.object({
+  filePath: zod.coerce.string(),
+});
+
+/**
+ * @summary Serve an object entity
+ */
+export const GetStorageObjectParams = zod.object({
+  objectPath: zod.coerce.string(),
+});

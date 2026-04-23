@@ -1,6 +1,9 @@
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { generateImageBuffer } from "@workspace/integrations-openai-ai-server/image";
 import { logger } from "./logger";
+import { ObjectStorageService } from "./objectStorage";
+
+const storage = new ObjectStorageService();
 
 const TEXT_MODEL = "gpt-5.4";
 
@@ -168,7 +171,7 @@ export async function generateCharacterReferenceImage(input: {
     .join(" ");
 
   const buffer = await generateImageBuffer(prompt, "1024x1024");
-  return `data:image/png;base64,${buffer.toString("base64")}`;
+  return await storage.uploadBuffer(buffer, "image/png", ".png");
 }
 
 export async function generateScenePreviewImage(input: {
@@ -205,7 +208,7 @@ export async function generateScenePreviewImage(input: {
 
   try {
     const buffer = await generateImageBuffer(prompt, "1024x1024");
-    return `data:image/png;base64,${buffer.toString("base64")}`;
+    return await storage.uploadBuffer(buffer, "image/png", ".png");
   } catch (err) {
     logger.error({ err }, "Scene preview generation failed");
     throw err;

@@ -5,6 +5,7 @@
  * Cinematic AI Studio API
  * OpenAPI spec version: 0.1.0
  */
+import type { ProjectExportStatus } from "./projectExportStatus";
 import type { ProjectStatus } from "./projectStatus";
 
 export interface Project {
@@ -21,6 +22,9 @@ export interface Project {
   status: ProjectStatus;
   /** @nullable */
   coverImageUrl?: string | null;
+  /** @nullable */
+  videoUrl?: string | null;
+  exportStatus: ProjectExportStatus;
   createdAt: Date;
   updatedAt: Date;
 }

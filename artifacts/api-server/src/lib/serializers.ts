@@ -11,6 +11,8 @@ export const serializeProject = (p: Project) => ({
   seed: p.seed,
   status: p.status,
   coverImageUrl: p.coverImageUrl,
+  videoUrl: p.videoUrl,
+  exportStatus: p.exportStatus,
   createdAt: p.createdAt.toISOString(),
   updatedAt: p.updatedAt.toISOString(),
 });

@@ -9,6 +9,21 @@ export interface HealthStatus {
   status: string;
 }
 
+export interface UploadUrlRequest {
+  /** @minLength 1 */
+  name: string;
+  /** @minimum 1 */
+  size: number;
+  /** @minLength 1 */
+  contentType: string;
+}
+
+export interface UploadUrlResponse {
+  uploadURL: string;
+  objectPath: string;
+  metadata?: UploadUrlRequest;
+}
+
 export interface ApiError {
   error: string;
 }
@@ -21,6 +36,16 @@ export const ProjectStatus = {
   rendering: "rendering",
   rendered: "rendered",
   published: "published",
+  failed: "failed",
+} as const;
+
+export type ProjectExportStatus =
+  (typeof ProjectExportStatus)[keyof typeof ProjectExportStatus];
+
+export const ProjectExportStatus = {
+  idle: "idle",
+  exporting: "exporting",
+  ready: "ready",
   failed: "failed",
 } as const;
 
@@ -38,6 +63,9 @@ export interface Project {
   status: ProjectStatus;
   /** @nullable */
   coverImageUrl?: string | null;
+  /** @nullable */
+  videoUrl?: string | null;
+  exportStatus: ProjectExportStatus;
   createdAt: string;
   updatedAt: string;
 }
