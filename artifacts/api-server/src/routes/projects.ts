@@ -1,6 +1,12 @@
 import { Router, type IRouter } from "express";
 import { eq, desc } from "drizzle-orm";
-import { db, projectsTable, charactersTable, scenesTable, schedulesTable } from "@workspace/db";
+import {
+  db,
+  projectsTable,
+  charactersTable,
+  scenesTable,
+  schedulesTable,
+} from "@workspace/db";
 import { CreateProjectBody, UpdateProjectBody } from "@workspace/api-zod";
 import { logger } from "../lib/logger";
 import {
@@ -11,8 +17,9 @@ import {
 } from "../lib/serializers";
 import {
   generateStoryPlan,
-  generateCharacterReferenceImage,
+  generateScenePreviewImage,
 } from "../lib/continuity-engine";
+
 import { ObjectStorageService } from "../lib/objectStorage";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -57,7 +64,9 @@ async function loadAssetBuffer(url: string): Promise<Buffer | null> {
 }
 
 async function runExportJob(projectId: number) {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `export-${projectId}-`));
+  const tmpDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), `export-${projectId}-`),
+  );
   try {
     const scenes = await db
       .select()
@@ -79,14 +88,20 @@ async function runExportJob(projectId: number) {
       const s = usable[i];
       const buf = await loadAssetBuffer(s.previewImageUrl!);
       if (!buf) continue;
-      const framePath = path.join(tmpDir, `frame_${String(i).padStart(4, "0")}.png`);
+      const framePath = path.join(
+        tmpDir,
+        `frame_${String(i).padStart(4, "0")}.png`,
+      );
       await fs.writeFile(framePath, buf);
       const duration = Math.max(1, s.durationSeconds || 4);
       concatLines.push(`file '${framePath.replace(/'/g, "'\\''")}'`);
       concatLines.push(`duration ${duration}`);
     }
     // ffmpeg concat demuxer requires the last file to be repeated without duration
-    const lastFrame = path.join(tmpDir, `frame_${String(usable.length - 1).padStart(4, "0")}.png`);
+    const lastFrame = path.join(
+      tmpDir,
+      `frame_${String(usable.length - 1).padStart(4, "0")}.png`,
+    );
     concatLines.push(`file '${lastFrame.replace(/'/g, "'\\''")}'`);
 
     const listPath = path.join(tmpDir, "concat.txt");
@@ -98,13 +113,20 @@ async function runExportJob(projectId: number) {
         .input(listPath)
         .inputOptions(["-f", "concat", "-safe", "0"])
         .outputOptions([
-          "-vsync", "vfr",
-          "-pix_fmt", "yuv420p",
-          "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=30",
-          "-c:v", "libx264",
-          "-preset", "veryfast",
-          "-crf", "23",
-          "-movflags", "+faststart",
+          "-vsync",
+          "vfr",
+          "-pix_fmt",
+          "yuv420p",
+          "-vf",
+          "scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=30",
+          "-c:v",
+          "libx264",
+          "-preset",
+          "veryfast",
+          "-crf",
+          "23",
+          "-movflags",
+          "+faststart",
         ])
         .save(outPath)
         .on("end", () => resolve())
@@ -136,6 +158,8 @@ async function runExportJob(projectId: number) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 }
+
+import { inArray } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -201,20 +225,9 @@ router.post("/projects", async (req, res) => {
     })
     .returning();
 
-  // Insert characters with reference images (parallel)
+  // Insert characters without reference images (generated lazily on demand)
   const characterRows = await Promise.all(
     plan.characters.map(async (c) => {
-      let referenceImageUrl: string | null = null;
-      try {
-        referenceImageUrl = await generateCharacterReferenceImage({
-          character: c,
-          stylePrompt: plan.stylePrompt,
-          colorGrading: plan.colorGrading,
-          seed,
-        });
-      } catch (err) {
-        logger.warn({ err, character: c.name }, "Character reference image failed");
-      }
       const [row] = await db
         .insert(charactersTable)
         .values({
@@ -224,7 +237,7 @@ router.post("/projects", async (req, res) => {
           clothing: c.clothing,
           voiceStyle: c.voiceStyle,
           basePrompt: c.basePrompt,
-          referenceImageUrl,
+          referenceImageUrl: null,
         })
         .returning();
       return row;
@@ -259,15 +272,6 @@ router.post("/projects", async (req, res) => {
       return row;
     }),
   );
-
-  // Use first character reference as cover if available
-  const cover = characterRows.find((c) => c.referenceImageUrl)?.referenceImageUrl ?? null;
-  if (cover) {
-    await db
-      .update(projectsTable)
-      .set({ coverImageUrl: cover })
-      .where(eq(projectsTable.id, insertedProject.id));
-  }
 
   const full = await loadProjectWithPlan(insertedProject.id);
   res.status(201).json(full);
@@ -355,7 +359,12 @@ router.post("/projects/:id/export", async (req, res) => {
     .where(eq(scenesTable.projectId, id));
   const renderable = scenes.filter((s) => s.previewImageUrl);
   if (renderable.length === 0) {
-    res.status(400).json({ error: "No rendered scenes available. Generate storyboard frames first." });
+    res
+      .status(400)
+      .json({
+        error:
+          "No rendered scenes available. Generate storyboard frames first.",
+      });
     return;
   }
   await db
@@ -368,6 +377,74 @@ router.post("/projects/:id/export", async (req, res) => {
   res.status(202).json(full);
 });
 
+async function renderProjectInBackground(id: number) {
+  const project = await db.query.projectsTable.findFirst({
+    where: eq(projectsTable.id, id),
+  });
+  if (!project) return;
+
+  const [scenes, allCharacters] = await Promise.all([
+    db
+      .select()
+      .from(scenesTable)
+      .where(eq(scenesTable.projectId, id))
+      .orderBy(scenesTable.sequence),
+    db.select().from(charactersTable).where(eq(charactersTable.projectId, id)),
+  ]);
+  const charById = new Map(allCharacters.map((c) => [c.id, c]));
+
+  await Promise.all(
+    scenes.map((s) =>
+      db
+        .update(scenesTable)
+        .set({ status: "rendering" })
+        .where(eq(scenesTable.id, s.id)),
+    ),
+  );
+
+  let firstUrl: string | null = null;
+  let succeeded = 0;
+
+  await Promise.allSettled(
+    scenes.map(async (scene) => {
+      const ids = scene.characterIds ?? [];
+      const chars = ids
+        .map((cid) => charById.get(cid))
+        .filter((c): c is NonNullable<typeof c> => !!c);
+      try {
+        const url = await generateScenePreviewImage({
+          scene,
+          stylePrompt: project.stylePrompt,
+          colorGrading: project.colorGrading,
+          seed: project.seed,
+          characters: chars,
+          previousSummary: scene.previousSummary,
+        });
+        await db
+          .update(scenesTable)
+          .set({ previewImageUrl: url, status: "rendered" })
+          .where(eq(scenesTable.id, scene.id));
+        succeeded++;
+        if (scene.sequence === 1 || !firstUrl) firstUrl = url;
+      } catch (err) {
+        logger.warn({ err, sceneId: scene.id }, "Scene render failed");
+        await db
+          .update(scenesTable)
+          .set({ status: "draft" })
+          .where(eq(scenesTable.id, scene.id));
+      }
+    }),
+  );
+
+  await db
+    .update(projectsTable)
+    .set({
+      status: succeeded === scenes.length ? "rendered" : "ready",
+      ...(firstUrl ? { coverImageUrl: firstUrl } : {}),
+    })
+    .where(eq(projectsTable.id, id));
+}
+
 router.post("/projects/:id/render", async (req, res) => {
   const id = Number(req.params.id);
   const project = await db.query.projectsTable.findFirst({
@@ -377,16 +454,19 @@ router.post("/projects/:id/render", async (req, res) => {
     res.status(404).json({ error: "Project not found" });
     return;
   }
-  await db
-    .update(scenesTable)
-    .set({ status: "queued" })
-    .where(eq(scenesTable.projectId, id));
+
   await db
     .update(projectsTable)
     .set({ status: "rendering" })
     .where(eq(projectsTable.id, id));
+
+  // Fire and forget — frontend polls for updates
+  renderProjectInBackground(id).catch((err) =>
+    logger.error({ err, projectId: id }, "Background render failed"),
+  );
+
   const full = await loadProjectWithPlan(id);
-  res.json(full);
+  res.status(202).json(full);
 });
 
 export default router;
